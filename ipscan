@@ -1,0 +1,82 @@
+#!/bin/ash
+
+# ###################
+# Network host check
+# ###################
+
+# Checks the arp and dhcp cache every 10 minutes and sends the
+# result over MQTT
+# You need to have mosquitto_pub installed locally
+
+# replace this with your localdomain - it will then be stripped 
+# from the MQTT publishs
+
+LOCALDOMAIN=.mydomain.local
+
+# ###################
+# arp cache scan
+# ###################
+
+do_arp_cache () {
+
+for SCANNED_HOST in $(cat /proc/1/net/arp | /usr/bin/awk -F " "  '{ print "SCANHOSTIP=" $1  ";SCANHOSTMAC="  $4 ";SCANHOSTSTATUS="  $3 ";SCANHOSTNETWORK="  $6  }')
+do
+	eval $SCANNED_HOST
+	#echo "Host: $SCANHOSTIP / $SCANHOSTMAC"
+	if [ "$SCANHOSTNETWORK" != "HW" ] ; then 
+		SCANHOSTNAME=$(/usr/bin/nslookup $SCANHOSTIP | /bin/grep name | /usr/bin/awk -F " = " '{print $2}' | /bin/sed -e s/$LOCALDOMAIN//)
+		#echo $SCANHOSTNAME
+		/usr/bin/mosquitto_pub -h localhost -t network -m "{\"interface\":\"$SCANHOSTNETWORK\",\"ip\":\"$SCANHOSTIP\",\"mac\":\"$SCANHOSTMAC\",\"hostname\":\"$SCANHOSTNAME\",\"status\":\"$SCANHOSTSTATUS\",\"source\":\"arp-cache\"}"
+	fi
+done
+}
+
+# ###################
+# arp  scan
+# ###################
+
+do_arp_scan () {
+
+for SCANNED_NETWORK in $(/sbin/route |/bin/grep "U " | /usr/bin/awk -F " "  '{ print "SCANINTERFACE=" $8  ";SCANNETMASK="  $1 "/24" }') 
+do
+	#echo "$SCANNED_NETWORK"
+	eval $SCANNED_NETWORK
+	for SCANNED_HOST in $(/usr/bin/arp-scan -qxI $SCANINTERFACE $SCANNETMASK | /usr/bin/awk -F " "  '{ print "SCANHOSTIP=" $1  ";SCANHOSTMAC="  $2 }' )
+	do
+		eval $SCANNED_HOST
+		#echo "Host: $SCANHOSTIP / $SCANHOSTMAC"
+		SCANHOSTNAME=$(/usr/bin/nslookup $SCANHOSTIP | /bin/grep name | /usr/bin/awk -F " = " '{print $2}' | /bin/sed -e s/$LOCALDOMAIN//)
+		#echo $SCANHOSTNAME
+		/usr/bin/mosquitto_pub -h localhost -t network -m "{\"interface\":\"$SCANINTERFACE\",\"ip\":\"$SCANHOSTIP\",\"mac\":\"$SCANHOSTMAC\",\"hostname\":\"$SCANHOSTNAME\",\"source\":\"arp-scan\"}"
+	done
+done
+}
+
+
+# ###################
+# dhcp cache  scan
+# ###################
+
+do_dhcp_scan () {
+
+for SCANNED_HOST in $(cat /tmp/dhcp.leases | /usr/bin/awk -F " "  '{ print "SCANHOSTIP=" $3  ";SCANHOSTMAC="  $2 ";SCANHOSTNAME="  $4  }' | /bin/sed s/*// )
+do
+	eval $SCANNED_HOST
+	#echo "Host: $SCANHOSTIP / $SCANHOSTMAC"
+	/usr/bin/mosquitto_pub -h localhost -t network -m "{\"ip\":\"$SCANHOSTIP\",\"mac\":\"$SCANHOSTMAC\",\"hostname\":\"$SCANHOSTNAME\",\"source\":\"dhcp-cache\"}"
+done
+}
+
+# ###################
+# main routine
+# ###################
+
+
+while (true) do
+	do_arp_scan
+	do_dhcp_scan
+	do_arp_cache
+	sleep 600
+done
+
+
