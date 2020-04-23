@@ -1,0 +1,16 @@
+#!/bin/ash
+
+# use OpenWrt as a camera streamer with UVC USB camera
+
+# install modules
+
+opkg update
+opkg install usbutils
+opkg install kmod-usb-core kmod-usb2 kmod-video-core
+opkg install kmod-video-uvc
+opkg install mjpg-streamer
+
+opkg install mjpg-streamer
+opkg install luci-app-mjpg-streamer
+
+/etc/init.d/mjpg-streamer enable
