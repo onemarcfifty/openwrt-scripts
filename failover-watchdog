@@ -1,0 +1,171 @@
+#!/bin/sh
+
+FAILOVERINTERFACE=eth1
+FAILBACKINTERFACE=br-wan
+FAILOVERGW=192.168.1.1
+FAILBACKGW=192.168.5.1
+HIGHCOST=1000
+LOWCOST=0
+PINGSLEEP=30
+CURRENTSTATE=START
+LASTSTATE=UNKNOWN
+
+# put your phone number here
+SMSNUMBER=55511166677
+
+FAILBACKAVAILABLE=NO
+FAILOVERAVAILABLE=NO
+PINGHOST=8.8.8.8
+PINGTRIES=5
+INITIALWAITTIME=120
+EXPECTEDFAILOVERHOUR="05"
+WAITBEFOREFAILBACK=180
+WAITATEXPECTEDFAILOVERHOUR=300
+
+# ###################
+# SMS ALERT
+# ###################
+
+alert_sms () {
+  /usr/bin/sendsms $SMSNUMBER $1 &
+}
+
+# ###################
+# FAILBACK
+# ###################
+
+do_failback () {
+ 
+  alert_sms FAILBACK
+  route delete default gw $FAILBACKGW                 
+  route delete default gw $FAILOVERGW                 
+  route add default gw $FAILBACKGW metric $LOWCOST 
+  route add default gw $FAILOVERGW metric $HIGHCOST   
+  CURRENTSTATE=FAILBACK
+  route
+}
+
+
+# ###################
+# FAILOVER
+# ###################
+
+do_failover () {
+
+  alert_sms FAILOVER
+  route delete default gw $FAILBACKGW                 
+  route delete default gw $FAILOVERGW                 
+  route add default gw $FAILBACKGW metric $HIGHCOST 
+  route add default gw $FAILOVERGW metric $LOWCOST   
+  CURRENTSTATE=FAILOVER
+  route
+}
+
+# ###################
+# ##### START
+# ###################
+
+echo Init - waiting $INITIALWAITTIME
+
+# wait for the dongle to become ready
+sleep $INITIALWAITTIME
+
+alert_sms WATCHDOG_START                
+route delete default gw $FAILBACKGW
+route delete default gw $FAILOVERGW
+route add default gw $FAILBACKGW metric $LOWCOST
+route add default gw $FAILOVERGW metric $HIGHCOST
+LASTSTATE=START
+CURRENTSTATE=FAILBACK
+
+route
+
+while (true) do
+
+  echo "LASTSTATE = $LASTSTATE"
+  echo "CURRENTSTATE = $CURRENTSTATE"
+
+  FAILBACKAVAILABLE=NO
+  FAILOVERAVAILABLE=NO
+
+  echo Test1
+
+  # do the ping PINGTRIES times, the first ones might be lost. If one out of PINGTRIES succeeds we are fine
+
+  COUNTER=0
+  while [  $COUNTER -lt $PINGTRIES ] && [ $FAILBACKAVAILABLE == NO ] && [ $FAILOVERAVAILABLE == NO ]; do
+    if (ping -c 1 -I $FAILBACKINTERFACE $PINGHOST) ; then FAILBACKAVAILABLE=YES ; fi
+    if (ping -c 1 -I $FAILOVERINTERFACE $PINGHOST) ; then FAILOVERAVAILABLE=YES ; fi
+    let COUNTER=COUNTER+1 
+  done
+
+
+  echo Check for WaitFailBack
+
+  # We want to avoid immediate failback after failover
+  # because experience shows that Telekom DSL shows up for a minute or two
+  # and then goes away again
+  # hence we wait a bit to see if the failback line is stable
+
+  if [ $FAILBACKAVAILABLE = YES ] && [ $CURRENTSTATE == FAILOVER ] ; then
+  	FAILBACKAVAILABLE=NO
+	alert_sms WAITBEFOREFAILBACK
+  	sleep $WAITBEFOREFAILBACK
+    COUNTER=0
+    while [  $COUNTER -lt $PINGTRIES ] && [ $FAILBACKAVAILABLE == NO ] ; do
+      if (ping -c 1 -I $FAILBACKINTERFACE $PINGHOST) ; then FAILBACKAVAILABLE=YES ; fi
+      let COUNTER=COUNTER+1 
+    done
+  fi
+  
+  echo Checking Conditions
+
+  # Case 1 : Failback to DSL is available
+
+  if [ $FAILBACKAVAILABLE = YES ] ; then 
+    if [ $CURRENTSTATE != FAILBACK ] ; then
+      do_failback
+    fi  
+  else
+
+  	# Case 2 : We might want to Fail over to 3G
+
+    if [ $FAILOVERAVAILABLE = YES ] ; then
+      if [ $CURRENTSTATE !=  FAILOVER ]; then
+
+        # check if we are in the expected blackout hour (Telekom disconnects at 5 in the morning)
+        # if so, give it another 5 minutes chance
+		
+        echo CheckforBlackoutHour
+
+		if [ $(date | awk -F [\ \:] '{ print $4 }') = $EXPECTEDFAILOVERHOUR ] ; then
+			sleep $WAITATEXPECTEDFAILOVERHOUR
+			COUNTER=0
+  			while [  $COUNTER -lt $PINGTRIES ] && [ $FAILBACKAVAILABLE == NO ]; do
+    			if (ping -c 1 -I $FAILBACKINTERFACE $PINGHOST) ; then FAILBACKAVAILABLE=YES ; fi
+    			let COUNTER=COUNTER+1 
+  			done
+		fi
+
+		if [ $FAILBACKAVAILABLE = NO ] ; then
+			do_failover
+		else
+			alert_sms FAILOVERAVOIDED
+		fi
+      fi
+    else
+
+      # Case 3 : Neither Failover nor Failback available (really bad....)	
+
+      	CURRENTSTATE=ERROR
+      	if (LASTSTATE != CURRENTSTATE) ; then
+        	alert_sms TOTALAUSFALL
+        fi
+
+    fi
+  fi 
+ 
+  LASTSTATE=$CURRENTSTATE
+  sleep $PINGSLEEP
+done
+
