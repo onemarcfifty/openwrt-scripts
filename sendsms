@@ -1,0 +1,30 @@
+#!/bin/sh
+
+# use this script to send text messages
+# to your phone ("SMS")
+# works with a huawei stick
+# with the CDC_Ether driver
+# lsusb output:
+# 12d1:14db Huawei Technologies Co., Ltd. E353/E3131
+
+# current limitation: no white spaces in message - might need
+# to replace with %20 or similar (HTML'ify)
+
+STICKIP=192.168.1.1
+
+
+RESPONSE=`curl -s -X GET http://192.168.1.1/api/webserver/SesTokInfo`
+COOKIE=`echo "$RESPONSE"| grep SessionID=| cut -b 10-147`
+TOKEN=`echo "$RESPONSE"| grep TokInfo| cut -b 10-41`
+
+echo COOKIE $COOKIE
+echo TOKEN  $TOKEN
+
+NUMBER=$1
+SMS=$2
+#DATA="<?xml version='1.0' encoding='UTF-8'?><request><Index>-1</Index><Phones><Phone>$NUMBER</Phone></Phones><Sca></Sca><Content>$SMS</Content><Length>11</Length><Reserved>1</Reserved><Date>-1</Date></request>"
+DATA="<request><Index>-1</Index><Phones><Phone>$NUMBER</Phone></Phones><Sca></Sca><Content>$SMS</Content><Length>11</Length><Reserved>1</Reserved><Date>-1</Date></request>"
+
+curl -v http://192.168.1.1/api/sms/send-sms \
+ -H "Cookie: $COOKIE" -H "__RequestVerificationToken: $TOKEN" -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" \
+ --data $DATA
