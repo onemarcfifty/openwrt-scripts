@@ -3,7 +3,7 @@
 # Install packages
 opkg update
 
-The package name has changed
+#The package name has changed
 #opkg install wireguard
 opkg install wireguard-tools
  
